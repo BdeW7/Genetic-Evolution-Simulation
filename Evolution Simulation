@@ -1,0 +1,238 @@
+using Random
+
+# Three genetic traits: Cooperativity, Endurance, Fitness
+# Two environmental traits: Hunger, Health
+
+
+
+
+
+function genBoard(sizeR, sizeC, foodnum)
+    Board = zeros(Int64, sizeR, sizeC)
+    for i in 1:foodnum
+        place = rand(1:(sizeR*sizeC))
+        Board[place]+=1
+    end
+    return Board
+end
+
+#genes are split into a position and type, each individual has exactly one gene of any position.
+#Gene 1 is a basic socialising gene,
+#Gene 2 is a basic Fitness gene,
+#Gene 3 is a complex endurance gene,
+#Gene 4 is a multivalent gene
+geneList = [
+    [[10, 0,0], [-10,0,0]],
+    [[0,0,15], [0,0,-15]],
+    [[-5,30,-10],[10,-30,5]],
+    [[5, 10, 5],[15, -5, 10]]
+]
+
+#individual Type
+@kwdef mutable struct Ind
+    Place::Int64
+
+    Genes::Vector{Vector{Int64}} = [rand(i) for i in geneList]
+
+    Cooperativity::Int64 = 50 + sum(gene[1] for gene in Genes)
+    Endurance::Int64 = 50 + sum(gene[2] for gene in Genes)
+    Fitness::Int64 = 50 + sum(gene[3] for gene in Genes)
+
+    Hunger::Int64 = 5
+    Health::Int64 = Endurance
+end
+
+mutable struct livingField
+    #Board: an array of locations with the amount of fodd at each
+    Board::Array{Int64,2}
+
+    #Inds: List of Individuals in the game
+    Inds::Vector{Ind}
+
+    #IndPos: Array of locations with which individuals are at each
+    IndPos:: Array{Vector{Int64}, 2}
+end
+
+function moveInd!(n,area)
+    area.Inds[n].Hunger += 5
+    if area.Inds[n].Hunger > area.Inds[n].Endurance
+        newPosition=0
+    else
+        down=size(area.Board, 2)
+        place = area.Inds[n].Place
+        move = rand([1,-1,down, (-1)*down])
+        newPosition = place+move
+        if move==1 && place%down==0
+            newPosition-=down
+        elseif move==-1 && newPosition%down==0
+            newPosition+=down
+        end
+        if newPosition<1
+            newPosition+=length(area.Board)
+        elseif newPosition>length(area.Board)
+            newPosition-=length(area.Board)
+        end
+    end
+    area.Inds[n].Place = newPosition 
+end
+
+function fight!(people, food, area, place)
+    Inds = [area.Inds[n] for n in people]
+    winners = collect(1:length(Inds))
+    firstFight = true
+    while length(winners)>food || firstFight
+        firstFight=false
+        fightValue = rand(1:100)
+        losers = Int64[]
+        for i in winners
+            if (Inds[i].Fitness*Inds[i].Health) ÷ Inds[i].Endurance <fightValue
+                push!(losers,i)
+            end
+        end
+        filter!(x -> !(x in losers), winners)
+        for i in losers
+            Inds[i].Health -= fightValue ÷ 10
+        end
+        for i in winners
+            Inds[i].Health -= fightValue ÷ 25
+        end
+    end
+    area.Board[place] -= length(winners)
+    for i in 1:length(Inds)
+        if  i in winners
+            Inds[i].Hunger = max(0, Inds[i].Hunger-5)
+        else
+            moveInd!(people[i], area)
+        end
+    end
+end
+
+
+function foodCompete!(people,food,area, place)
+    numPeople=length(people)
+    Inds = [area.Inds[n] for n in people]
+    modifiedCooperation = [i.Cooperativity - i.Hunger for i in Inds]
+    averageCooperation = sum(modifiedCooperation)/numPeople
+    if averageCooperation>70
+        foodvalue=(5*food) ÷ numPeople
+        for P in Inds
+            P.Hunger = max(0, P.Hunger-foodvalue)
+        end
+        area.Board[place] = 0
+    else 
+        fight!(people, food, area, place)
+    end
+end
+    
+
+function excessFoodCompete!(people,food,area, place)
+    numPeople=length(people)
+    Inds = [area.Inds[n] for n in people]
+    Cooperation = [i.Cooperativity for i in Inds]
+    averageCooperation = sum(Cooperation)/numPeople
+    if averageCooperation>50
+        for P in Inds
+            P.Hunger = max(0, P.Hunger-5)
+        end
+        area.Board[place] -= numPeople
+    else 
+        fight!(people, food, area, place)
+    end
+end
+
+
+
+function stepInd!(people,area, place)
+    numPeople= length(people)
+    food = area.Board[place]
+    if numPeople==0 
+        return
+    else
+        if food==0
+            for n in people
+                moveInd!(n,area)
+            end
+        elseif food>=numPeople
+            excessFoodCompete!(people, food, area, place)
+        else
+            foodCompete!(people,food, area, place)
+        end
+    end
+end
+
+function stepBoardEat!(area::livingField)
+    for place in eachindex(area.Board)
+        people = area.IndPos[place]
+        stepInd!(people,area, place)
+    end
+    area.Inds = filter(P -> P.Place!=0, area.Inds)
+    area.IndPos = reshape([Int64[] for _ in eachindex(area.Board)], size(area.Board))
+    for i in 1:length(area.Inds)
+        person = area.Inds[i]
+        push!(area.IndPos[person.Place], i)
+        if person.Hunger < 10
+            person.Health = max(peron.Endurance, peron.Health + 10 - person.Hunger)
+        end
+        person.Hunger+=2
+    end
+end
+
+function reproduce(a,b,area)
+    father=area.Inds[a]
+    mother=area.Inds[b]
+    newGenes =[rand([father.Genes[i], mother.Genes[i]]) for i in length(father.Genes)]
+    place = father.Place
+    child = Ind(Genes=newGenes, Place=place)
+    push!(area.Inds, child)
+    n=length(area.Inds)
+    push!(area.IndPos[place], n)
+end
+
+function stepBoardReproduce!(area::livingField)
+    for place in eachindex(area.Board)
+        people = filter(P -> area.Inds[P].Hunger<10 && (area.Inds[P].Endurance - area.Inds[P].Health)>10 , area.IndPos[place])
+        while length(people)>1
+            a=rand(people)
+            delete!(people,a)
+            b=rand(people)
+            delete!(people, b)
+            reproduce(a,b, area)
+            area.Inds[a].Hunger+=10
+            area.Inds[b].Hunger+=10
+        end
+    end
+end
+
+function stepBoardGenerateFood!(area::livingField, new::Int64=0)
+    n=length(area.Board)
+    for i in 1:n
+        if area.Board[i]!=0
+            area.Board[i]+=1
+        end
+    end
+    if new!=0
+        for i in 1:new
+            place=rand(1:n)
+            area.Board[place]+=1
+        end
+    end
+end
+
+function simulateLife(sizeRow, sizeColoumn, startingfood, startingPeople, newFoodRate, iterations)
+    board = genBoard(sizeRow, sizeColoumn, startingfood)
+    size=sizeRow*sizeColoumn
+    people=[Ind(Place=rand(1:size)) for _ in 1:startingPeople]
+    positions= fill(Int64[], sizeRow, sizeColoumn)
+    for i in 1:startingPeople
+        push!(positions[people[i].Place], i)
+    end
+    area=livingField(board, people, positions)
+    count=0
+    while count<iterations
+        count+=1
+        stepBoardEat!(area)
+        stepBoardReproduce!(area)
+        stepBoardGenerateFood!(area, newFoodRate)
+    end
+    return area
+end
